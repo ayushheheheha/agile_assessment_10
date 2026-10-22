@@ -17,6 +17,7 @@ main{padding:24px 28px;max-width:1300px;margin:auto}
 .scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:.9rem}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+td.wrap{white-space:normal;min-width:260px}
 th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
 tr.alert td{background:rgba(239,68,68,.08)}
 .banner{padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:.92rem}
@@ -27,8 +28,20 @@ tr.alert td{background:rgba(239,68,68,.08)}
 .b-idle{background:rgba(100,116,139,.25);color:#cbd5e1}
 .b-maintenance{background:rgba(56,189,248,.18);color:var(--info)}
 .b-down{background:rgba(239,68,68,.2);color:var(--bad)}
+.s-critical{background:rgba(239,68,68,.25);color:#fca5a5}
+.s-high{background:rgba(249,115,22,.25);color:#fdba74}
+.s-medium{background:rgba(245,158,11,.22);color:#fcd34d}
+.s-low{background:rgba(34,197,94,.18);color:var(--ok)}
 .over{color:var(--bad);font-weight:700}
 .soon{color:var(--warn);font-weight:600}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.kpi .label{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
+.kpi .value{font-size:1.7rem;font-weight:700;margin-top:6px}
+.kpi .note{color:var(--muted);font-size:.8rem;margin-top:4px}
+.filters{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.filters label{color:var(--muted);font-size:.85rem}
+select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin-left:6px}
 footer{text-align:center;color:var(--muted);font-size:.8rem;padding:18px}
 </style>
 </head>
@@ -38,12 +51,23 @@ footer{text-align:center;color:var(--muted);font-size:.8rem;padding:18px}
     <h1>Industrial Equipment Monitoring Dashboard</h1>
     <div class="sub">Simulated plant data &middot; Warning limits: temperature &gt; 80&deg;C, vibration &gt; 4.5 mm/s</div>
   </div>
-  <div class="sub" id="stamp"></div>
+  <div class="sub"><label><input type="checkbox" id="live"> Simulate live sensor readings</label> &nbsp;|&nbsp; <span id="stamp"></span></div>
 </header>
 <main>
+  <div class="kpis" id="kpis"></div>
   <section id="alerts"></section>
+
   <div class="panel">
     <h2>Machine Status</h2>
+    <div class="filters">
+      <label>Status
+        <select id="fStatus">
+          <option>All</option><option>Running</option><option>Idle</option><option>Maintenance</option><option>Down</option>
+        </select>
+      </label>
+      <label>Production Unit <select id="fUnit"></select></label>
+      <span class="sub" id="count"></span>
+    </div>
     <div class="scroll">
       <table>
         <thead>
@@ -56,8 +80,20 @@ footer{text-align:center;color:var(--muted);font-size:.8rem;padding:18px}
       </table>
     </div>
   </div>
+
+  <div class="panel">
+    <h2>Maintenance Priority (highest risk first)</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Machine</th><th>Unit</th><th>Risk Score</th><th>Severity</th><th>Key Issue</th><th>Recommended Action</th></tr>
+        </thead>
+        <tbody id="prio"></tbody>
+      </table>
+    </div>
+  </div>
 </main>
-<footer>Version v1.0 &middot; Equipment Monitoring Dashboard</footer>
+<footer>Version v2.0 &middot; Equipment Monitoring Dashboard &middot; Predictive Maintenance &amp; Downtime Analytics</footer>
 
 <script>
 const TEMP_LIMIT = 80;      // degrees C
@@ -65,6 +101,7 @@ const VIB_LIMIT  = 4.5;     // mm/s RMS
 const today = new Date();
 const fmt = d => d.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});
 const inDays = n => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+const $ = id => document.getElementById(id);
 
 // Simulated equipment data. dueIn = days until maintenance due (negative = overdue), ago = days since last downtime
 const machines = [
@@ -81,18 +118,41 @@ const machines = [
 const hot   = m => m.temp > TEMP_LIMIT;
 const shaky = m => m.vib  > VIB_LIMIT;
 
-function renderAlerts() {
-  const list = machines.filter(m => hot(m) || shaky(m));
-  const el = document.getElementById('alerts');
-  if (!list.length) { el.innerHTML = '<div class="banner ok">All machines are within normal limits</div>'; return; }
-  el.innerHTML = list.map(m => {
-    const why = [];
-    if (hot(m))   why.push(`temperature ${m.temp.toFixed(1)}&deg;C exceeds ${TEMP_LIMIT}&deg;C`);
-    if (shaky(m)) why.push(`vibration ${m.vib.toFixed(1)} mm/s exceeds ${VIB_LIMIT} mm/s`);
-    return `<div class="banner warn">&#9888; <b>WARNING &middot; ${m.id}</b> (${m.unit}): ${why.join(' and ')}</div>`;
-  }).join('');
+// ---- Predictive maintenance risk model (0-100) ----
+function risk(m) {
+  let s = 0;
+  s += Math.max(0, m.temp - 60) * 1.2;          // heat above normal operating band
+  s += Math.max(0, m.vib - 2) * 8;              // vibration above healthy baseline
+  s += Math.min(m.downtime, 20) * 1.5;          // recent downtime history
+  if (m.dueIn < 0)       s += 25 + Math.min(-m.dueIn, 15);   // overdue maintenance
+  else if (m.dueIn <= 7)  s += 12;
+  else if (m.dueIn <= 14) s += 6;
+  return Math.min(100, Math.round(s));
+}
+const severity = s => s >= 80 ? 'Critical' : s >= 55 ? 'High' : s >= 30 ? 'Medium' : 'Low';
+
+function issue(m) {
+  const p = [];
+  if (m.status === 'Down') p.push('Machine is down');
+  if (hot(m))   p.push(`Temp ${m.temp.toFixed(1)}°C > ${TEMP_LIMIT}°C`);
+  if (shaky(m)) p.push(`Vibration ${m.vib.toFixed(1)} > ${VIB_LIMIT} mm/s`);
+  if (m.dueIn < 0) p.push(`Maintenance overdue ${-m.dueIn}d`);
+  else if (m.dueIn <= 7) p.push(`Maintenance due in ${m.dueIn}d`);
+  return p.length ? p.join('; ') : 'No active issues';
 }
 
+function action(m) {
+  if (m.status === 'Down')        return 'Immediate repair: isolate machine, replace the failed component, run commissioning test before restart';
+  if (m.status === 'Maintenance') return 'Service in progress: verify sensor readings before returning machine to service';
+  if (shaky(m) && hot(m))         return 'Stop at next safe point: inspect bearings and cooling, rebalance and lubricate';
+  if (shaky(m))                   return 'Inspect bearings and shaft alignment; lubricate and rebalance';
+  if (hot(m))                     return 'Check coolant flow and filters; reduce load until temperature normalises';
+  if (m.dueIn < 0)                return 'Maintenance overdue: schedule service within 24 hours';
+  if (m.dueIn <= 7)               return 'Plan preventive maintenance this week';
+  return 'Continue routine monitoring';
+}
+
+// ---- Rendering ----
 function dueCell(m) {
   const txt = fmt(inDays(m.dueIn));
   if (m.dueIn < 0)  return `<span class="over">${txt} (overdue ${-m.dueIn}d)</span>`;
@@ -100,8 +160,38 @@ function dueCell(m) {
   return txt;
 }
 
-function renderTable() {
-  document.getElementById('rows').innerHTML = machines.map(m => `
+function renderKpis() {
+  const running = machines.filter(m => m.status === 'Running').length;
+  const totalDown = machines.reduce((a, m) => a + m.downtime, 0);
+  const warn = machines.filter(m => hot(m) || shaky(m)).length;
+  const top = machines.map(m => ({m, s: risk(m)})).sort((a, b) => b.s - a.s)[0];
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="label">Operational Machines</div><div class="value">${running} / ${machines.length}</div><div class="note">Status = Running</div></div>
+    <div class="kpi"><div class="label">Total Downtime (7 days)</div><div class="value">${totalDown.toFixed(1)} h</div><div class="note">Across all production units</div></div>
+    <div class="kpi"><div class="label">Active Sensor Warnings</div><div class="value">${warn}</div><div class="note">Temp &gt; ${TEMP_LIMIT}&deg;C or vibration &gt; ${VIB_LIMIT} mm/s</div></div>
+    <div class="kpi"><div class="label">Highest Maintenance Risk</div><div class="value">${top.m.id}</div><div class="note">Risk score ${top.s}/100 &middot; ${severity(top.s)} &middot; ${top.m.unit}</div></div>`;
+}
+
+function renderAlerts() {
+  const list = machines.filter(m => hot(m) || shaky(m));
+  if (!list.length) { $('alerts').innerHTML = '<div class="banner ok">All machines are within normal limits</div>'; return; }
+  $('alerts').innerHTML = list.map(m => {
+    const why = [];
+    if (hot(m))   why.push(`temperature ${m.temp.toFixed(1)}&deg;C exceeds ${TEMP_LIMIT}&deg;C`);
+    if (shaky(m)) why.push(`vibration ${m.vib.toFixed(1)} mm/s exceeds ${VIB_LIMIT} mm/s`);
+    return `<div class="banner warn">&#9888; <b>WARNING &middot; ${m.id}</b> (${m.unit}): ${why.join(' and ')}</div>`;
+  }).join('');
+}
+
+function filtered() {
+  const s = $('fStatus').value, u = $('fUnit').value;
+  return machines.filter(m => (s === 'All' || m.status === s) && (u === 'All' || m.unit === u));
+}
+
+function renderTables() {
+  const list = filtered();
+  $('count').textContent = `Showing ${list.length} of ${machines.length} machines`;
+  $('rows').innerHTML = list.map(m => `
     <tr class="${hot(m) || shaky(m) ? 'alert' : ''}">
       <td><b>${m.id}</b></td>
       <td>${m.unit}</td>
@@ -111,12 +201,51 @@ function renderTable() {
       <td><span class="badge b-${m.status.toLowerCase()}">${m.status}</span></td>
       <td>${dueCell(m)}</td>
       <td>${m.downtime} h &middot; ${m.last} (${m.ago === 0 ? 'today' : m.ago + 'd ago'})</td>
-    </tr>`).join('');
+    </tr>`).join('') || '<tr><td colspan="8" class="sub">No machines match the selected filters</td></tr>';
+
+  const ranked = list.map(m => ({m, s: risk(m)})).sort((a, b) => b.s - a.s);
+  $('prio').innerHTML = ranked.map((r, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td><b>${r.m.id}</b></td>
+      <td>${r.m.unit}</td>
+      <td><b>${r.s}</b> / 100</td>
+      <td><span class="badge s-${severity(r.s).toLowerCase()}">${severity(r.s)}</span></td>
+      <td class="wrap">${issue(r.m)}</td>
+      <td class="wrap">${action(r.m)}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="sub">No machines match the selected filters</td></tr>';
 }
 
-document.getElementById('stamp').textContent = 'Last updated: ' + today.toLocaleString();
-renderAlerts();
-renderTable();
+function renderAll() {
+  $('stamp').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  renderKpis();
+  renderAlerts();
+  renderTables();
+}
+
+// ---- Filters ----
+const units = [...new Set(machines.map(m => m.unit))];
+$('fUnit').innerHTML = ['All', ...units].map(u => `<option>${u}</option>`).join('');
+$('fStatus').addEventListener('change', renderTables);
+$('fUnit').addEventListener('change', renderTables);
+
+// ---- Optional live simulation ----
+let timer = null;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+$('live').addEventListener('change', e => {
+  clearInterval(timer);
+  if (!e.target.checked) return;
+  timer = setInterval(() => {
+    machines.forEach(m => {
+      if (m.status !== 'Running') return;
+      m.temp = +clamp(m.temp + (Math.random() * 3 - 1.5), 55, 95).toFixed(1);
+      m.vib  = +clamp(m.vib  + (Math.random() * 0.4 - 0.2), 1, 7).toFixed(1);
+    });
+    renderAll();
+  }, 3000);
+});
+
+renderAll();
 </script>
 </body>
 </html>
