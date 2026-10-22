@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Equipment Monitoring Dashboard</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--idle:#64748b;--info:#38bdf8}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:20px 28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+h1{font-size:1.3rem;margin:0}
+h2{font-size:1.05rem;margin:0 0 12px}
+.sub{color:var(--muted);font-size:.85rem}
+main{padding:24px 28px;max-width:1300px;margin:auto}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:22px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
+tr.alert td{background:rgba(239,68,68,.08)}
+.banner{padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:.92rem}
+.banner.warn{background:rgba(239,68,68,.15);border:1px solid var(--bad)}
+.banner.ok{background:rgba(34,197,94,.12);border:1px solid var(--ok)}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:.78rem;font-weight:600}
+.b-running{background:rgba(34,197,94,.18);color:var(--ok)}
+.b-idle{background:rgba(100,116,139,.25);color:#cbd5e1}
+.b-maintenance{background:rgba(56,189,248,.18);color:var(--info)}
+.b-down{background:rgba(239,68,68,.2);color:var(--bad)}
+.over{color:var(--bad);font-weight:700}
+.soon{color:var(--warn);font-weight:600}
+footer{text-align:center;color:var(--muted);font-size:.8rem;padding:18px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Industrial Equipment Monitoring Dashboard</h1>
+    <div class="sub">Simulated plant data &middot; Warning limits: temperature &gt; 80&deg;C, vibration &gt; 4.5 mm/s</div>
+  </div>
+  <div class="sub" id="stamp"></div>
+</header>
+<main>
+  <section id="alerts"></section>
+  <div class="panel">
+    <h2>Machine Status</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Machine ID</th><th>Production Unit</th><th>Operating Hours</th><th>Temperature</th>
+            <th>Vibration</th><th>Status</th><th>Maintenance Due</th><th>Recent Downtime (7 days)</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<footer>Version v1.0 &middot; Equipment Monitoring Dashboard</footer>
+
+<script>
+const TEMP_LIMIT = 80;      // degrees C
+const VIB_LIMIT  = 4.5;     // mm/s RMS
+const today = new Date();
+const fmt = d => d.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});
+const inDays = n => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+
+// Simulated equipment data. dueIn = days until maintenance due (negative = overdue), ago = days since last downtime
+const machines = [
+  {id:'CNC-101', unit:'Machining', hours:12450, temp:72, vib:3.2, status:'Running',     dueIn:14, downtime:2.5, last:'Tool change',          ago:3},
+  {id:'CNC-102', unit:'Machining', hours:15820, temp:83, vib:4.8, status:'Running',     dueIn:-4, downtime:6,   last:'Spindle overheating',  ago:2},
+  {id:'PRS-201', unit:'Stamping',  hours:21340, temp:78, vib:4.1, status:'Running',     dueIn:8,  downtime:4,   last:'Hydraulic leak',       ago:7},
+  {id:'PRS-202', unit:'Stamping',  hours:9870,  temp:65, vib:2.4, status:'Idle',        dueIn:49, downtime:1,   last:'Scheduled changeover', ago:1},
+  {id:'WLD-301', unit:'Welding',   hours:17600, temp:88, vib:3.9, status:'Running',     dueIn:3,  downtime:8.5, last:'Cooling fault',        ago:1},
+  {id:'ASM-401', unit:'Assembly',  hours:6420,  temp:58, vib:1.9, status:'Running',     dueIn:40, downtime:0.5, last:'Sensor recalibration', ago:10},
+  {id:'PNT-501', unit:'Painting',  hours:24100, temp:76, vib:5.6, status:'Down',        dueIn:-2, downtime:26,  last:'Bearing failure',      ago:0},
+  {id:'PKG-601', unit:'Packaging', hours:11200, temp:69, vib:3.0, status:'Maintenance', dueIn:1,  downtime:12,  last:'Planned servicing',    ago:0}
+];
+
+const hot   = m => m.temp > TEMP_LIMIT;
+const shaky = m => m.vib  > VIB_LIMIT;
+
+function renderAlerts() {
+  const list = machines.filter(m => hot(m) || shaky(m));
+  const el = document.getElementById('alerts');
+  if (!list.length) { el.innerHTML = '<div class="banner ok">All machines are within normal limits</div>'; return; }
+  el.innerHTML = list.map(m => {
+    const why = [];
+    if (hot(m))   why.push(`temperature ${m.temp.toFixed(1)}&deg;C exceeds ${TEMP_LIMIT}&deg;C`);
+    if (shaky(m)) why.push(`vibration ${m.vib.toFixed(1)} mm/s exceeds ${VIB_LIMIT} mm/s`);
+    return `<div class="banner warn">&#9888; <b>WARNING &middot; ${m.id}</b> (${m.unit}): ${why.join(' and ')}</div>`;
+  }).join('');
+}
+
+function dueCell(m) {
+  const txt = fmt(inDays(m.dueIn));
+  if (m.dueIn < 0)  return `<span class="over">${txt} (overdue ${-m.dueIn}d)</span>`;
+  if (m.dueIn <= 7) return `<span class="soon">${txt} (in ${m.dueIn}d)</span>`;
+  return txt;
+}
+
+function renderTable() {
+  document.getElementById('rows').innerHTML = machines.map(m => `
+    <tr class="${hot(m) || shaky(m) ? 'alert' : ''}">
+      <td><b>${m.id}</b></td>
+      <td>${m.unit}</td>
+      <td>${m.hours.toLocaleString()} h</td>
+      <td class="${hot(m) ? 'over' : ''}">${m.temp.toFixed(1)}&deg;C ${hot(m) ? '&#9888;' : ''}</td>
+      <td class="${shaky(m) ? 'over' : ''}">${m.vib.toFixed(1)} mm/s ${shaky(m) ? '&#9888;' : ''}</td>
+      <td><span class="badge b-${m.status.toLowerCase()}">${m.status}</span></td>
+      <td>${dueCell(m)}</td>
+      <td>${m.downtime} h &middot; ${m.last} (${m.ago === 0 ? 'today' : m.ago + 'd ago'})</td>
+    </tr>`).join('');
+}
+
+document.getElementById('stamp').textContent = 'Last updated: ' + today.toLocaleString();
+renderAlerts();
+renderTable();
+</script>
+</body>
+</html>

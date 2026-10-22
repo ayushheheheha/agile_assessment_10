@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pm-dashboard
+  labels:
+    app: pm-dashboard
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 60
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0      # never remove a healthy pod before a new one is Ready
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: pm-dashboard
+  template:
+    metadata:
+      labels:
+        app: pm-dashboard
+    spec:
+      containers:
+        - name: pm-dashboard
+          image: IMAGE_PLACEHOLDER      # replaced by the Jenkins pipeline at deploy time
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pm-dashboard-service
+spec:
+  type: NodePort
+  selector:
+    app: pm-dashboard
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30080
